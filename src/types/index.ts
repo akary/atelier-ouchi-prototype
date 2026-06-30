@@ -30,12 +30,23 @@ export interface BoundingBox {
   y: number;
   width: number;
   height: number;
+  centerX: number; // 動体ピクセルの重心（ノイズ等の外れ値に強い）
+  centerY: number;
 }
 
 // Renderer が毎フレーム受け取る合成出力
 export interface TrackerOutput {
   pose: PoseData | null;
   shadow: ShadowData | null;
+}
+
+// ========== Tracker 共通インターフェース ==========
+
+export interface IPositionTracker {
+  /** カーソル or 影の中心座標をスクリーン座標で返す */
+  getPos(): Vector2;
+  /** 触れている星を1つ返す（なければ null） */
+  findCollision(stars: readonly Star[]): Star | null;
 }
 
 // ========== Star Catch Scene ==========

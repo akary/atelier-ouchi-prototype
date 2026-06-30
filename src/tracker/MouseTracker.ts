@@ -1,11 +1,11 @@
-import type { Star, Vector2 } from '../types';
+import type { Star, Vector2, IPositionTracker } from '../types';
 import { distance } from '../utils/math';
 
 // 当たり判定の倍率 (star.size の何倍以内でポップするか)
 // 1歳の子ども向けなので大きめに設定
 const HIT_RADIUS_FACTOR = 1.5;
 
-export class MouseTracker {
+export class MouseTracker implements IPositionTracker {
   private pos: Vector2;
 
   constructor(canvas: HTMLCanvasElement) {

@@ -1,8 +1,20 @@
 import type { ShadowData, BoundingBox } from '../types';
 
-const CANVAS_W = 640;
-const CANVAS_H = 480;
-const DIFF_THRESHOLD = 30; // 背景差分の感度（大きいほど鈍感）
+// 毎フレーム getImageData + 差分ループが走るので小さめに
+const CANVAS_W = 320;
+const CANVAS_H = 240;
+const DIFF_THRESHOLD = 90; // 背景差分の感度（大きいほど鈍感。暗所だとセンサーノイズが大きく低い値だと画面全体が誤検出する）
+// センサーノイズ等で数ピクセルだけ反応するケースを「未検出」扱いにする下限
+// (320x240=76800px 中、これ未満なら無視)
+const MIN_MOVING_PIXELS = 400;
+// 背景の追従速度。自動露出・自動ホワイトバランスによるゆっくりした明るさ変化を
+// 吸収するため、「動いていない」と判定された部分だけ毎フレーム少しずつ現在の
+// 映像に近づける（大きいほど速く追従するが、敏感になりすぎると検出感度が落ちる）
+const BG_ADAPT_RATE = 0.02;
+// 動体ピクセルの割合がこれを超えたら「本物の動きではなく露出が急変した」と判断し、
+// 背景をその場で撮り直す（adaptBackground は動いていない部分しか更新しないため、
+// 画面のほぼ全部が動体判定されると一切回復できずロックしてしまうのを防ぐ安全装置）
+const RESET_RATIO_THRESHOLD = 0.85;
 
 export class ShadowTracker {
   private video: HTMLVideoElement;
@@ -33,11 +45,48 @@ export class ShadowTracker {
       ? this.subtractBackground(current, this.background)
       : current;
 
+    if (this.background) {
+      const movingRatio = this.countMoving(mask) / (CANVAS_W * CANVAS_H);
+
+      if (movingRatio > RESET_RATIO_THRESHOLD) {
+        // 露出・ホワイトバランスの急変と判断し、背景を即座に撮り直す
+        this.background = current;
+        console.warn('[ShadowTracker] 画面全体の急変を検出 → 背景を再キャプチャしました');
+        return { mask: new ImageData(CANVAS_W, CANVAS_H), boundingBox: null, timestamp: performance.now() };
+      }
+
+      // 「動いていない」と判定された部分だけ背景をゆっくり更新（明るさ変化に追従）
+      this.adaptBackground(current, mask);
+    }
+
     return {
       mask,
       boundingBox: this.computeBoundingBox(mask),
       timestamp: performance.now(),
     };
+  }
+
+  private countMoving(mask: ImageData): number {
+    let count = 0;
+    for (let i = 3; i < mask.data.length; i += 4) {
+      if (mask.data[i] > 0) count++;
+    }
+    return count;
+  }
+
+  private adaptBackground(current: ImageData, mask: ImageData): void {
+    if (!this.background) return;
+    const bg  = this.background.data;
+    const cur = current.data;
+    const m   = mask.data;
+
+    for (let i = 0; i < bg.length; i += 4) {
+      if (m[i + 3] === 0) { // 動いていないピクセルだけ背景に取り込む
+        bg[i]     += (cur[i]     - bg[i])     * BG_ADAPT_RATE;
+        bg[i + 1] += (cur[i + 1] - bg[i + 1]) * BG_ADAPT_RATE;
+        bg[i + 2] += (cur[i + 2] - bg[i + 2]) * BG_ADAPT_RATE;
+      }
+    }
   }
 
   private subtractBackground(current: ImageData, bg: ImageData): ImageData {
@@ -59,10 +108,10 @@ export class ShadowTracker {
     return result;
   }
 
-  // 差分マスクから動体のバウンディングボックスを計算
+  // 差分マスクから動体のバウンディングボックス＋重心を計算
   private computeBoundingBox(mask: ImageData): BoundingBox | null {
     let minX = CANVAS_W, minY = CANVAS_H, maxX = 0, maxY = 0;
-    let found = false;
+    let count = 0, sumX = 0, sumY = 0;
 
     for (let y = 0; y < CANVAS_H; y++) {
       for (let x = 0; x < CANVAS_W; x++) {
@@ -72,12 +121,23 @@ export class ShadowTracker {
           minY = Math.min(minY, y);
           maxX = Math.max(maxX, x);
           maxY = Math.max(maxY, y);
-          found = true;
+          sumX += x;
+          sumY += y;
+          count++;
         }
       }
     }
 
-    if (!found) return null;
-    return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+    // ノイズ（センサーノイズ等で数ピクセルだけ反応）は「未検出」扱いにする
+    if (count < MIN_MOVING_PIXELS) return null;
+
+    return {
+      x: minX,
+      y: minY,
+      width: maxX - minX,
+      height: maxY - minY,
+      centerX: sumX / count, // 重心：外れ値ノイズに強い
+      centerY: sumY / count,
+    };
   }
 }
