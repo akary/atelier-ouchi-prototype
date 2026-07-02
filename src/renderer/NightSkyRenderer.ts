@@ -13,11 +13,19 @@ const STONE_SINK_PX = 160;  // 石を地面画像に埋め込む量（浮き防�
 // ====================================================
 // メイン描画クラス
 // ====================================================
+// グロー焼き込みスプライトの内部設定。
+// 星画像がスプライト全体の GLOW_INNER_RATIO を占め、残りをグローのにじみ代にする。
+const GLOW_SPRITE_SIZE = 128;                       // 焼き込みキャンバスの一辺
+const GLOW_INNER_RATIO = 0.62;                      // その中で星画像が占める割合
+const GLOW_INNER_PX    = GLOW_SPRITE_SIZE * GLOW_INNER_RATIO;
+
 export class NightSkyRenderer {
   private readonly canvas: HTMLCanvasElement;
   private readonly ctx: CanvasRenderingContext2D;
   private readonly images: readonly HTMLImageElement[];
   private readonly scene: SceneImages;
+  // 各星画像＋グローを1回だけ焼き込んだスプライト（毎フレームの shadowBlur を回避）
+  private readonly glowSprites: readonly HTMLCanvasElement[];
 
   constructor(
     canvas: HTMLCanvasElement,
@@ -31,10 +39,27 @@ export class NightSkyRenderer {
     if (!ctx) throw new Error('Canvas 2D context 取得失敗');
     this.ctx = ctx;
 
+    this.glowSprites = this.bakeGlowSprites();
+
     this.canvas.width  = window.innerWidth;
     this.canvas.height = window.innerHeight;
 
     window.addEventListener('resize', () => this.resize());
+  }
+
+  // 星画像それぞれに淡い黄色グローを焼き込んだオフスクリーンを事前生成する。
+  // これで drawStar は毎フレーム drawImage するだけになり shadowBlur が不要になる。
+  private bakeGlowSprites(): HTMLCanvasElement[] {
+    return this.images.map((img) => {
+      const c = document.createElement('canvas');
+      c.width = c.height = GLOW_SPRITE_SIZE;
+      const g = c.getContext('2d')!;
+      const off = (GLOW_SPRITE_SIZE - GLOW_INNER_PX) / 2;
+      g.shadowColor = 'rgba(255, 240, 150, 0.5)';
+      g.shadowBlur  = GLOW_INNER_PX * 0.25;
+      g.drawImage(img, off, off, GLOW_INNER_PX, GLOW_INNER_PX);
+      return c;
+    });
   }
 
   draw(
@@ -167,21 +192,21 @@ export class NightSkyRenderer {
 
     if (opacity <= 0) return;
 
-    const img = this.images[imageIndex];
-    if (!img) return;
+    const sprite = this.glowSprites[imageIndex];
+    if (!sprite) return;
 
     // フェードイン中は 0.6 → 1.0 にスケールアップして出現感を出す
     const scale    = opacity < 1 ? 0.6 + opacity * 0.4 : 1.0;
     const drawSize = size * 2 * scale;
+    // スプライトはグロー代を含むので、星の実寸ぶんに割り戻して貼る
+    const spriteSize = drawSize / GLOW_INNER_RATIO;
 
     ctx.save();
-    ctx.globalAlpha  = opacity;
+    ctx.globalAlpha = opacity;
     ctx.translate(position.x, position.y);
     ctx.rotate(rotation);
-    // 淡い黄色のグロー（夜空に浮かんでいる感）
-    ctx.shadowColor = 'rgba(255, 240, 150, 0.5)';
-    ctx.shadowBlur  = size * 0.5 * scale;
-    ctx.drawImage(img, -drawSize / 2, -drawSize / 2, drawSize, drawSize);
+    // グロー焼き込み済みスプライトを貼るだけ（毎フレームの shadowBlur を廃止）
+    ctx.drawImage(sprite, -spriteSize / 2, -spriteSize / 2, spriteSize, spriteSize);
     ctx.restore();
   }
 
