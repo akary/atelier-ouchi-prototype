@@ -93,12 +93,15 @@ export class ShadowTracker {
     const result = new ImageData(CANVAS_W, CANVAS_H);
 
     for (let i = 0; i < current.data.length; i += 4) {
-      const diff =
-        Math.abs(current.data[i]     - bg.data[i])     +
-        Math.abs(current.data[i + 1] - bg.data[i + 1]) +
-        Math.abs(current.data[i + 2] - bg.data[i + 2]);
+      // 「背景より暗くなった量」だけを影として検出する。
+      // 星の爆発アニメーション（明るくなる変化）は darkening が負になるため
+      // 自動的に無視され、人物の影（投影を遮って暗くなる）だけが反応する。
+      const darkening =
+        (bg.data[i]     - current.data[i])     +
+        (bg.data[i + 1] - current.data[i + 1]) +
+        (bg.data[i + 2] - current.data[i + 2]);
 
-      const moving = diff > DIFF_THRESHOLD;
+      const moving = darkening > DIFF_THRESHOLD;
       result.data[i]     = moving ? 255 : 0;
       result.data[i + 1] = moving ? 255 : 0;
       result.data[i + 2] = moving ? 255 : 0;

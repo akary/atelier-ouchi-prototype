@@ -1,7 +1,8 @@
-import { NightSkyRenderer } from './renderer/NightSkyRenderer';
+import { NightSkyRenderer, MOON_CY, MOON_SIZE } from './renderer/NightSkyRenderer';
 import { MouseTracker } from './tracker/MouseTracker';
 import { CameraTracker } from './tracker/CameraTracker';
 import { createStar } from './utils/starFactory';
+import { loadStarImages, loadSceneImages } from './utils/imageLoader';
 import {
   createSparkleParticles,
   createPopFlash,
@@ -10,30 +11,101 @@ import {
 } from './utils/particleFactory';
 import type { Star, Particle, PopFlash, Vector2, IPositionTracker } from './types';
 
-const STAR_COUNT        = 10;
+const STAR_COUNT        = 30;
 const RESPAWN_DELAY_MS  = 900;
 const FADEIN_SPEED      = 1.4;
 
 // ---- 星の配置 ----
-function spawnStars(count: number): Star[] {
+
+// 指定エリアを格子分割してランダムジッターで n 点を生成する（重なり防止）
+function gridPositions(n: number, x0: number, y0: number, x1: number, y1: number): Vector2[] {
+  const W = x1 - x0;
+  const H = y1 - y0;
+  const cols = Math.max(1, Math.ceil(Math.sqrt(n * W / H)));
+  const rows = Math.max(1, Math.ceil(n / cols));
+  const cellW = W / cols;
+  const cellH = H / rows;
+
+  const cells: Vector2[] = [];
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      cells.push({
+        x: x0 + (c + 0.15 + Math.random() * 0.7) * cellW,
+        y: y0 + (r + 0.15 + Math.random() * 0.7) * cellH,
+      });
+    }
+  }
+  // Fisher-Yates でシャッフルして n 個返す
+  for (let i = cells.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [cells[i], cells[j]] = [cells[j]!, cells[i]!];
+  }
+  return cells.slice(0, n);
+}
+
+// 月の円形エリアと重なっていないか判定（星の描画半径ぶん余白を加える）
+function clearOfMoon(x: number, y: number): boolean {
+  const moonCX = Math.round(window.innerWidth / 3);
+  const exclusionR = MOON_SIZE / 2 + 80; // 月半径 + 星の最大描画半径
+  return Math.hypot(x - moonCX, y - MOON_CY) > exclusionR;
+}
+
+function spawnStars(count: number, groundH: number): Star[] {
   const margin = 120;
   const w = window.innerWidth;
   const h = window.innerHeight;
-  return Array.from({ length: count }, (_, i) => {
-    const star = createStar(i, margin + Math.random() * (w - margin * 2), margin + Math.random() * (h - margin * 2));
+  const mid = h / 2;
+  const bottom = h - groundH; // ground上端から40px上を下限に
+
+  // 下半分 65%、上半分 35%
+  const lowerCount = Math.round(count * 0.65);
+  const upperCount = count - lowerCount;
+
+  // 月と被る候補を除外するため多めに生成してフィルタリング
+  function safePositions(n: number, x0: number, y0: number, x1: number, y1: number): Vector2[] {
+    const result: Vector2[] = [];
+    for (let attempt = 0; result.length < n && attempt < 8; attempt++) {
+      const candidates = gridPositions(n * 2, x0, y0, x1, y1);
+      for (const p of candidates) {
+        if (result.length >= n) break;
+        if (clearOfMoon(p.x, p.y)) result.push(p);
+      }
+    }
+    return result.slice(0, n);
+  }
+
+  const positions = [
+    ...safePositions(upperCount, margin, margin, w - margin, mid),
+    ...safePositions(lowerCount, margin, mid,    w - margin, bottom),
+  ];
+
+  return positions.map((pos, i) => {
+    const star = createStar(i, pos.x, pos.y);
     star.opacity = 1;
     return star;
   });
 }
 
-function spawnOneStar(existingCount: number, mousePos: Vector2): Star {
+const STAR_MIN_DIST = 160; // 星同士の中心間最小距離
+
+function spawnOneStar(existingCount: number, mousePos: Vector2, existing: readonly Star[], groundH: number): Star {
   const margin = 120, minDist = 220;
   const w = window.innerWidth, h = window.innerHeight;
+  const bottom = h - groundH - 40;
   let x = 0, y = 0, tries = 0;
   do {
     x = margin + Math.random() * (w - margin * 2);
-    y = margin + Math.random() * (h - margin * 2);
-  } while (Math.hypot(x - mousePos.x, y - mousePos.y) < minDist && ++tries < 30);
+    // リスポーンも同じ分布（下65%）
+    y = Math.random() < 0.65
+      ? h / 2 + Math.random() * (bottom - h / 2)
+      : margin  + Math.random() * (h / 2 - margin);
+  } while (
+    (
+      Math.hypot(x - mousePos.x, y - mousePos.y) < minDist ||
+      !clearOfMoon(x, y) ||
+      existing.some(s => s.opacity > 0.1 && Math.hypot(x - s.position.x, y - s.position.y) < STAR_MIN_DIST)
+    ) && ++tries < 40
+  );
   return createStar(existingCount % 8, x, y);
 }
 
@@ -54,7 +126,6 @@ function showCameraSetup(cameraTracker: CameraTracker, onReady: () => void): voi
   preview.style.cssText = `
     width:240px; height:180px; border-radius:12px; object-fit:cover;
     border:2px solid rgba(255,255,255,0.3); display:none;
-    transform:scaleX(-1); /* 左右反転して鏡像表示 */
   `;
 
   // ステータステキスト
@@ -117,13 +188,11 @@ function createDebugPanel(
   `;
 
   // カメラ映像（setup overlay から移動してくる）
-  // ※鏡像表示（scaleX(-1)）は見た目だけの反転。座標計算には影響しない
   const video = cameraTracker.getVideoElement();
   video.style.cssText = `
     display:block; width:${DISP_W}px; height:${DISP_H}px;
     object-fit:cover; border-radius:6px;
     border:1px solid rgba(255,255,255,0.3);
-    transform:scaleX(-1);
   `;
   const v = document.createElement('div');
   const vLbl = document.createElement('div');
@@ -137,7 +206,6 @@ function createDebugPanel(
   maskCanvas.style.cssText = `
     display:block; width:${DISP_W}px; height:${DISP_H}px;
     border-radius:6px; border:1px solid rgba(255,255,255,0.3);
-    transform:scaleX(-1);
   `;
   const maskCtx = maskCanvas.getContext('2d')!;
   const m = document.createElement('div');
@@ -225,18 +293,25 @@ function createSwitchButton(onClick: () => void): void {
 }
 
 // ---- メイン ----
-function main(): void {
+async function main(): Promise<void> {
   const canvas = document.querySelector<HTMLCanvasElement>('#canvas');
   if (!canvas) throw new Error('#canvas が見つかりません');
 
-  const stars: Star[]         = spawnStars(STAR_COUNT);
+  const [images, scene] = await Promise.all([loadStarImages(), loadSceneImages()]);
+
+  const groundH = scene.ground.height * (window.innerWidth / scene.ground.width);
+  const stars: Star[]         = spawnStars(STAR_COUNT, groundH);
   const particles: Particle[] = [];
   const flashes: PopFlash[]   = [];
   const respawnQueue: number[] = [];
 
-  const renderer      = new NightSkyRenderer(canvas);
+  // パパが梯子を上る進捗（0=下端 〜 1=月の位置）
+  let papaTarget   = 0;
+  let papaProgress = 0;
+
+  const renderer      = new NightSkyRenderer(canvas, images, scene);
   const mouseTracker  = new MouseTracker(canvas);
-  const cameraTracker = new CameraTracker(true); // flipX=true（背面カメラ想定）
+  const cameraTracker = new CameraTracker(false);
 
   let tracker: IPositionTracker = mouseTracker;
   let lastTime = 0;
@@ -261,7 +336,12 @@ function main(): void {
       flashes.push(createPopFlash(hit));
       stars.splice(stars.indexOf(hit), 1);
       respawnQueue.push(timeMs + RESPAWN_DELAY_MS);
+      // 星をひとつ弾くたびにパパが少し上る
+      papaTarget = Math.min(1, papaTarget + 0.008);
     }
+
+    // パパをなめらかに目標位置へ近づける
+    papaProgress += (papaTarget - papaProgress) * Math.min(1, deltaSec * 3);
 
     // パーティクル更新
     updateParticles(particles, deltaSec);
@@ -276,7 +356,7 @@ function main(): void {
     while (i < respawnQueue.length) {
       if (timeMs >= (respawnQueue[i] ?? 0)) {
         respawnQueue.splice(i, 1);
-        stars.push(spawnOneStar(stars.length, mousePos));
+        stars.push(spawnOneStar(stars.length, mousePos, stars, groundH));
       } else { i++; }
     }
 
@@ -287,7 +367,7 @@ function main(): void {
       star.position.y = star.basePosition.y + Math.sin(timeSec * star.floatSpeed        + star.floatPhase) * star.floatAmplitude;
     }
 
-    renderer.draw(stars, particles, flashes, mousePos);
+    renderer.draw(stars, particles, flashes, mousePos, papaProgress);
     if (updateDebug) updateDebug(mainCtx);
     requestAnimationFrame(loop);
   }
@@ -305,4 +385,4 @@ function main(): void {
   console.log('[main] 起動完了（マウスモード）');
 }
 
-main();
+main().catch(console.error);

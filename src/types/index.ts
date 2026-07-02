@@ -56,12 +56,13 @@ export interface Star {
   position: Vector2;
   readonly size: number;
   readonly basePosition: Vector2;     // 浮遊アニメの基準座標
-  readonly colors: readonly string[]; // エリック・カール用カラーセット
+  readonly colors: readonly string[]; // パーティクルの色（ポップ時に使用）
   opacity: number;                    // 0=不可視 → 1=通常 (フェードイン用)
   readonly floatPhase: number;
   readonly floatSpeed: number;
   readonly floatAmplitude: number;
-  readonly texture: OffscreenCanvas;  // 事前レンダリングしたテクスチャ
+  readonly imageIndex: number;        // 0〜9 (star-1.png〜star-10.png)
+  readonly rotation: number;          // 初期回転角（ラジアン）— 違う星に見せるため
 }
 
 // ========== Particle System ==========

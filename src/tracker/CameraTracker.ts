@@ -1,17 +1,17 @@
 import type { Star, Vector2, IPositionTracker, ShadowData } from '../types';
 import { ShadowTracker } from './ShadowTracker';
-import { distance } from '../utils/math';
 
 const HIT_RADIUS_FACTOR = 1.5;
 const CAM_W = 320;
 const CAM_H = 240;
+// 星の当たり判定円の中で、この割合以上が動体ピクセルなら「触れた」とみなす
+const OCCLUSION_RATIO_THRESHOLD = 0.2;
 
 export class CameraTracker implements IPositionTracker {
   private readonly video: HTMLVideoElement;
   private readonly shadow: ShadowTracker;
   private calibrated = false;
   private shadowPos: Vector2 | null = null;
-  private shadowHitRadius = 0;
   private lastShadowData: ShadowData | null = null;
 
   /**
@@ -71,43 +71,58 @@ export class CameraTracker implements IPositionTracker {
         x: this.flipX ? window.innerWidth - rawX : rawX,
         y: rawY,
       };
-
-      // 影のサイズをスクリーン座標系に換算（当たり判定の追加半径に使う）
-      this.shadowHitRadius =
-        (Math.max(bb.width, bb.height) / 2) * Math.max(scaleX, scaleY);
-    } else {
-      // 検出が途切れても shadowPos はリセットしない（最後の位置に留まる）
-      // ノイズ等で一瞬検出が飛んだ際に、反対側などへ瞬間移動するのを防ぐため
-      this.shadowHitRadius = 0;
     }
+    // 検出が途切れても shadowPos はリセットしない（最後の位置に留まる）
+    // ノイズ等で一瞬検出が飛んだ際に、反対側などへ瞬間移動するのを防ぐため
   }
 
   getPos(): Vector2 {
     return this.shadowPos ?? { x: -9999, y: -9999 }; // 影がなければ画面外
   }
 
+  // 星ごとに「その星が壁に投影されている場所が影マスクで遮られているか」を直接調べる。
+  // 体全体の重心ではなく星の位置をピンポイントで見るので、手を伸ばすだけでも反応する。
   findCollision(stars: readonly Star[]): Star | null {
-    if (!this.shadowPos) return null;
-
-    const pos = this.shadowPos;
-    // 影のサイズ分だけ当たり判定を広げる（上限あり）
-    const extraRadius = Math.min(this.shadowHitRadius * 0.4, 120);
-
-    let closest: Star | null = null;
-    let closestDist = Infinity;
+    if (!this.lastShadowData) return null;
 
     for (const star of stars) {
       if (star.opacity < 0.5) continue;
-      const dist = distance(pos, star.position);
-      if (
-        dist < star.size * HIT_RADIUS_FACTOR + extraRadius &&
-        dist < closestDist
-      ) {
-        closest     = star;
-        closestDist = dist;
+      if (this.isStarOccluded(star)) return star;
+    }
+    return null;
+  }
+
+  private isStarOccluded(star: Star): boolean {
+    const mask = this.lastShadowData?.mask;
+    if (!mask) return false;
+
+    const scaleX = window.innerWidth  / CAM_W;
+    const scaleY = window.innerHeight / CAM_H;
+
+    // 星のスクリーン座標 → カメラ座標へ逆変換（getPos の変換の逆）
+    const rawX = this.flipX ? window.innerWidth - star.position.x : star.position.x;
+    const camX = rawX / scaleX;
+    const camY = star.position.y / scaleY;
+
+    // 星の当たり判定半径をカメラ座標系に変換（小さすぎるとサンプル数が足りないので下限あり）
+    const radius = Math.max((star.size * HIT_RADIUS_FACTOR) / Math.max(scaleX, scaleY), 5);
+
+    let sampled = 0;
+    let occluded = 0;
+
+    for (let dy = -radius; dy <= radius; dy++) {
+      for (let dx = -radius; dx <= radius; dx++) {
+        if (dx * dx + dy * dy > radius * radius) continue; // 円形に絞る
+        const x = Math.round(camX + dx);
+        const y = Math.round(camY + dy);
+        if (x < 0 || x >= CAM_W || y < 0 || y >= CAM_H) continue;
+
+        sampled++;
+        if (mask.data[(y * CAM_W + x) * 4 + 3] > 0) occluded++;
       }
     }
-    return closest;
+
+    return sampled > 0 && occluded / sampled > OCCLUSION_RATIO_THRESHOLD;
   }
 
   getLastShadowData(): ShadowData | null {

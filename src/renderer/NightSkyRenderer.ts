@@ -1,75 +1,14 @@
 import type { Star, Vector2, Particle, PopFlash } from '../types';
+import type { SceneImages } from '../utils/imageLoader';
 
-// ====================================================
-// 夜空の背景をエリック・カール風テクスチャで事前レンダリング
-// ====================================================
-function renderBackground(w: number, h: number): OffscreenCanvas {
-  const canvas = new OffscreenCanvas(w, h);
-  const ctx = canvas.getContext('2d');
-  if (!ctx) throw new Error('OffscreenCanvas 2D context 取得失敗');
-
-  // ベース: エリック・カール「お星様を描いて」の深い青
-  ctx.fillStyle = '#060e3c';
-  ctx.fillRect(0, 0, w, h);
-
-  // 絵の具ブロック: ランダムなサイズの矩形を重ねて塗り重ね感を出す
-  type PaintBlock = [number, number, number, number]; // [r, g, b, maxAlpha]
-  const paintColors: PaintBlock[] = [
-    [4, 10, 48, 0.18],   // 暗いインディゴ
-    [6, 15, 60, 0.14],   // ネイビー
-    [9, 20, 72, 0.11],   // 中間ネイビー
-    [12, 28, 90, 0.07],  // やや明るいアクセント
-    [3, 8, 38, 0.20],    // 最も暗い
-    [5, 12, 52, 0.15],   // 標準ネイビー
-    [14, 32, 96, 0.05],  // 淡い青（インクの溜まり）
-  ];
-
-  // 大きな絵の具の塊（刷毛で広げたような筆致）
-  for (let i = 0; i < 160; i++) {
-    const c = paintColors[i % paintColors.length]!;
-    const alpha = Math.random() * c[3];
-    ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},${alpha})`;
-    const rw = 70 + Math.random() * 420;
-    const rh = 25 + Math.random() * 180;
-    const x = Math.random() * w;
-    const y = Math.random() * h;
-    ctx.fillRect(x - rw / 2, y - rh / 2, rw, rh);
-  }
-
-  // 水平ブラシストローク（エリック・カールの絵に特有の横線）
-  for (let i = 0; i < 600; i++) {
-    const c = paintColors[Math.floor(Math.random() * paintColors.length)]!;
-    const alpha = Math.random() * 0.10;
-    ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},${alpha})`;
-    const x = Math.random() * w * 0.4;
-    const strokeW = w * 0.35 + Math.random() * w * 0.65;
-    const y = Math.random() * h;
-    const strokeH = 1 + Math.random() * 2.5;
-    ctx.fillRect(x, y, strokeW, strokeH);
-  }
-
-  // 背景の小さな星（インタラクティブな星とは別の、遠くの星）
-  for (let i = 0; i < 65; i++) {
-    const x = Math.random() * w;
-    const y = Math.random() * h;
-    const r = Math.random() < 0.75 ? 0.7 : 1.3;
-    const alpha = 0.22 + Math.random() * 0.52;
-    ctx.fillStyle = `rgba(240,242,255,${alpha})`;
-    ctx.beginPath();
-    ctx.arc(x, y, r, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  // 紙の目（コウゾ紙のような細かい繊維テクスチャ）
-  for (let i = 0; i < 6000; i++) {
-    const x = Math.random() * w;
-    const y = Math.random() * h;
-    ctx.fillStyle = `rgba(90,130,210,${Math.random() * 0.016})`;
-    ctx.fillRect(x, y, 1, 1);
-  }
-
-  return canvas;
-}
+// 月の表示サイズと縦位置（横位置は canvas.width/3 で動的に決まる）
+export const MOON_SIZE = 260;
+export const MOON_CY   = 132;
+const LADDER_W  = 80;  // 梯子の表示幅
+const PAPA_W    = 64;  // パパの表示幅
+const PAPA_H    = 88;  // パパの表示高さ
+const STONE_W       = 160; // 石の表示幅
+const STONE_SINK_PX = 160;  // 石を地面画像に埋め込む量（浮き防止）
 
 // ====================================================
 // メイン描画クラス
@@ -77,17 +16,23 @@ function renderBackground(w: number, h: number): OffscreenCanvas {
 export class NightSkyRenderer {
   private readonly canvas: HTMLCanvasElement;
   private readonly ctx: CanvasRenderingContext2D;
-  private background: OffscreenCanvas;
+  private readonly images: readonly HTMLImageElement[];
+  private readonly scene: SceneImages;
 
-  constructor(canvas: HTMLCanvasElement) {
+  constructor(
+    canvas: HTMLCanvasElement,
+    images: readonly HTMLImageElement[],
+    scene: SceneImages,
+  ) {
     this.canvas = canvas;
+    this.images = images;
+    this.scene  = scene;
     const ctx = canvas.getContext('2d');
     if (!ctx) throw new Error('Canvas 2D context 取得失敗');
     this.ctx = ctx;
 
     this.canvas.width  = window.innerWidth;
     this.canvas.height = window.innerHeight;
-    this.background = renderBackground(this.canvas.width, this.canvas.height);
 
     window.addEventListener('resize', () => this.resize());
   }
@@ -97,38 +42,146 @@ export class NightSkyRenderer {
     particles: readonly Particle[],
     flashes: readonly PopFlash[],
     mousePos: Vector2,
+    papaProgress: number,
   ): void {
     const { ctx, canvas } = this;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    ctx.drawImage(this.background, 0, 0);
+    ctx.drawImage(this.scene.background, 0, 0, canvas.width, canvas.height);
 
     for (const star of stars) this.drawStar(star);
+
+    this.drawMoon();
+    this.drawLadder();
+    this.drawGround();
+    this.drawStone();
+
+    this.drawPapa(papaProgress);
+
     for (const p of particles) this.drawParticle(p);
     for (const f of flashes)   this.drawFlash(f);
 
     this.drawCursorGlow(mousePos);
   }
 
+  private drawMoon(): void {
+    const { ctx, canvas } = this;
+    const moonCX = Math.round(canvas.width / 3);
+    // 月のぼんやりした光の輪
+    const haloR = MOON_SIZE * 0.9;
+    const grd = ctx.createRadialGradient(moonCX, MOON_CY, MOON_SIZE * 0.4, moonCX, MOON_CY, haloR);
+    grd.addColorStop(0,   'rgba(255,248,200,0.22)');
+    grd.addColorStop(1,   'rgba(255,248,200,0)');
+    ctx.fillStyle = grd;
+    ctx.fillRect(moonCX - haloR, MOON_CY - haloR, haloR * 2, haloR * 2);
+    // 月の画像
+    ctx.drawImage(this.scene.moon, moonCX - MOON_SIZE / 2, MOON_CY - MOON_SIZE / 2 + 20, MOON_SIZE, MOON_SIZE);
+  }
+
+  // 梯子のジオメトリを計算して返す。
+  // 梯子の上端は月の縁（中心ではなく、月の表面に届く点）とする。
+  private getLadderGeometry(): { bx: number; by: number; topX: number; topY: number; dx: number; dy: number; len: number; angle: number } {
+    const moonCX = Math.round(this.canvas.width / 3);
+    const bx = this.canvas.width / 2;
+    const by = this.canvas.height;
+    // 月の中心から梯子の下端方向への単位ベクトルを求め、月の半径分だけオフセットした点を上端とする
+    const toBottomX = bx - moonCX;
+    const toBottomY = by - MOON_CY;
+    const moonDist  = Math.hypot(toBottomX, toBottomY);
+    const topX = moonCX + (toBottomX / moonDist) * (MOON_SIZE / 2);
+    const topY = MOON_CY + (toBottomY / moonDist) * (MOON_SIZE / 2);
+    const dx    = topX - bx;
+    const dy    = topY - by;
+    const len   = Math.hypot(dx, dy);
+    const angle = Math.atan2(dy, dx);
+    return { bx, by, topX, topY, dx, dy, len, angle };
+  }
+
+  private drawLadder(): void {
+    const { ctx } = this;
+    const { bx, by, topX, topY, len, angle } = this.getLadderGeometry();
+
+    ctx.save();
+    ctx.translate((bx + topX) / 2, (by + topY) / 2);
+    ctx.rotate(angle + Math.PI / 2);
+    ctx.drawImage(this.scene.ladder, -LADDER_W / 2+15, -len / 2, LADDER_W, len);
+    ctx.restore();
+  }
+
+  private getGroundH(): number {
+    const img = this.scene.ground;
+    return img.height * (this.canvas.width / img.width);
+  }
+
+  private getStoneH(): number {
+    const img = this.scene.stone;
+    return img.height * (STONE_W / img.width);
+  }
+
+  private drawGround(): void {
+    const { ctx, canvas } = this;
+    const groundH = this.getGroundH();
+    ctx.drawImage(this.scene.ground, 0, canvas.height - groundH, canvas.width, groundH);
+  }
+
+  private drawStone(): void {
+    const { ctx, canvas } = this;
+    const groundH = this.getGroundH();
+    const stoneH  = this.getStoneH();
+    ctx.drawImage(
+      this.scene.stone,
+      canvas.width / 2 - STONE_W / 2,
+      canvas.height - groundH - stoneH + STONE_SINK_PX,
+      STONE_W,
+      stoneH,
+    );
+  }
+
+  private drawPapa(progress: number): void {
+    const { ctx, canvas } = this;
+    const { topX, topY } = this.getLadderGeometry();
+
+    // スタート位置: 石の上端（梯子の根元）
+    const groundH = this.getGroundH();
+    const stoneH  = this.getStoneH();
+    const startX  = canvas.width / 2;
+    const startY  = canvas.height - groundH - stoneH + STONE_SINK_PX;
+
+    const dx    = topX - startX;
+    const dy    = topY - startY;
+    const angle = Math.atan2(dy, dx);
+
+    const px = startX + dx * progress;
+    const py = startY + dy * progress;
+
+    ctx.save();
+    ctx.translate(px, py);
+    ctx.rotate(angle + Math.PI / 2 + 0.25); // 少し傾ける
+    ctx.drawImage(this.scene.papa, -PAPA_W / 2, -PAPA_H / 2, PAPA_W, PAPA_H);
+    ctx.restore();
+  }
+
   private drawStar(star: Star): void {
     const { ctx } = this;
-    const { position, size, texture, opacity } = star;
+    const { position, size, opacity, imageIndex, rotation } = star;
 
     if (opacity <= 0) return;
 
+    const img = this.images[imageIndex];
+    if (!img) return;
+
     // フェードイン中は 0.6 → 1.0 にスケールアップして出現感を出す
-    const scale       = opacity < 1 ? 0.6 + opacity * 0.4 : 1.0;
-    const drawRadius  = size * scale;
+    const scale    = opacity < 1 ? 0.6 + opacity * 0.4 : 1.0;
+    const drawSize = size * 2 * scale;
 
     ctx.save();
-    ctx.globalAlpha = opacity;
-    ctx.drawImage(
-      texture,
-      position.x - drawRadius * 1.2,
-      position.y - drawRadius * 1.2,
-      drawRadius * 2.4,
-      drawRadius * 2.4,
-    );
+    ctx.globalAlpha  = opacity;
+    ctx.translate(position.x, position.y);
+    ctx.rotate(rotation);
+    // 淡い黄色のグロー（夜空に浮かんでいる感）
+    ctx.shadowColor = 'rgba(255, 240, 150, 0.5)';
+    ctx.shadowBlur  = size * 0.5 * scale;
+    ctx.drawImage(img, -drawSize / 2, -drawSize / 2, drawSize, drawSize);
     ctx.restore();
   }
 
@@ -197,6 +250,5 @@ export class NightSkyRenderer {
   private resize(): void {
     this.canvas.width  = window.innerWidth;
     this.canvas.height = window.innerHeight;
-    this.background = renderBackground(this.canvas.width, this.canvas.height);
   }
 }
