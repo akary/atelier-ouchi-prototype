@@ -1,7 +1,7 @@
 import { NightSkyRenderer, MOON_CY, MOON_SIZE } from './renderer/NightSkyRenderer';
 import { MouseTracker } from './tracker/MouseTracker';
 import { CameraTracker } from './tracker/CameraTracker';
-import { HandTracker } from './tracker/HandTracker';
+import { HandTracker, enterHandMode, createHandDebugPanel } from './hand-touch';
 import { createStar } from './utils/starFactory';
 import { loadStarImages, loadSceneImages } from './utils/imageLoader';
 import {
@@ -279,105 +279,6 @@ function createDebugPanel(
   };
 }
 
-// ---- 手モードのセットアップ（背景キャリブレ不要。カメラ起動＋モデル読込のみ）----
-function showHandSetup(handTracker: HandTracker, onReady: () => void): void {
-  const overlay = document.createElement('div');
-  overlay.style.cssText = `
-    position:fixed; inset:0; background:rgba(4,12,46,0.82); backdrop-filter:blur(6px);
-    display:flex; flex-direction:column; align-items:center; justify-content:center;
-    gap:24px; z-index:100; color:#fff; font-family:sans-serif;
-  `;
-
-  const status = document.createElement('p');
-  status.style.cssText = `margin:0; font-size:18px; text-align:center; line-height:1.6; white-space:pre-line;`;
-  status.textContent = '手をかざして星に触れると弾けます';
-
-  const btn = document.createElement('button');
-  btn.textContent = '✋ 手あそびを始める';
-  btn.style.cssText = `
-    padding:14px 32px; font-size:18px; border-radius:40px; cursor:pointer;
-    background:rgba(255,255,255,0.15); color:#fff;
-    border:2px solid rgba(255,255,255,0.4); backdrop-filter:blur(4px);
-  `;
-
-  overlay.append(status, btn);
-  document.body.appendChild(overlay);
-
-  btn.addEventListener('click', async () => {
-    btn.remove();
-    try {
-      status.textContent = '読み込み中…\n（カメラ起動＋手認識モデル）';
-      await handTracker.init();
-      status.textContent = '✨ スタート！';
-      await new Promise((r) => setTimeout(r, 500));
-      overlay.remove();
-      onReady();
-    } catch (err) {
-      status.textContent = '起動に失敗しました。\nカメラ権限とネットワークを確認してください。';
-      console.error('[HandSetup]', err);
-    }
-  });
-}
-
-// ---- 手モードのデバッグパネル（映像プレビュー＋ランドマークをメイン画面に重畳）----
-function createHandDebugPanel(
-  handTracker: HandTracker,
-): (mainCtx: CanvasRenderingContext2D) => void {
-  const DISP_W = 160, DISP_H = 120;
-
-  const panel = document.createElement('div');
-  panel.style.cssText = `
-    position:fixed; bottom:12px; left:12px; z-index:200;
-    display:flex; gap:8px; align-items:flex-end;
-    font-family:monospace; font-size:11px; color:rgba(255,255,255,0.75);
-  `;
-
-  const video = handTracker.getVideoElement();
-  video.style.cssText = `
-    display:block; width:${DISP_W}px; height:${DISP_H}px;
-    object-fit:cover; border-radius:6px; border:1px solid rgba(255,255,255,0.3);
-  `;
-  const v = document.createElement('div');
-  const vLbl = document.createElement('div');
-  vLbl.textContent = 'カメラ映像';
-  v.append(vLbl, video);
-
-  const infoLine = document.createElement('div');
-  infoLine.style.cssText = `
-    white-space:pre; line-height:1.5; padding:6px 8px;
-    background:rgba(0,0,0,0.5); border-radius:6px;
-  `;
-  panel.append(v, infoLine);
-  document.body.appendChild(panel);
-
-  return (mainCtx: CanvasRenderingContext2D) => {
-    const hands = handTracker.getLastHands();
-    infoLine.textContent =
-      `hands: ${hands.length}\n` +
-      `window: ${window.innerWidth}x${window.innerHeight}`;
-
-    // 手のランドマークをメイン画面に重畳（触点が星のどこに来ているか確認用）
-    mainCtx.save();
-    for (const hand of hands) {
-      mainCtx.fillStyle = 'rgba(0,220,255,0.75)';
-      for (const p of hand) {
-        mainCtx.beginPath();
-        mainCtx.arc(p.x, p.y, 4, 0, Math.PI * 2);
-        mainCtx.fill();
-      }
-    }
-    // 代表点（手のひら中心）を大きく
-    const pos = handTracker.getPos();
-    if (pos.x > -1000) {
-      mainCtx.strokeStyle = 'rgba(255,0,200,0.95)';
-      mainCtx.lineWidth = 3;
-      mainCtx.beginPath();
-      mainCtx.arc(pos.x, pos.y, 40, 0, Math.PI * 2);
-      mainCtx.stroke();
-    }
-    mainCtx.restore();
-  };
-}
 
 // ---- モード切り替えボタン（常時表示）----
 // rightPx で複数ボタンを横並びにする。押されたら自分だけ消える。
@@ -414,7 +315,7 @@ async function main(): Promise<void> {
   const renderer      = new NightSkyRenderer(canvas, images, scene);
   const mouseTracker  = new MouseTracker(canvas);
   const cameraTracker = new CameraTracker(false);
-  const handTracker   = new HandTracker(false); // カメラが対面配置で鏡像なら true に
+  const handTracker   = new HandTracker(); // 4点キャリブレで向き・歪みを補正するので flipX 不要
 
   let tracker: IPositionTracker = mouseTracker;
   let lastTime = 0;
@@ -477,11 +378,14 @@ async function main(): Promise<void> {
   }
 
   // 手モード切り替えボタン（本命：手で星に触れると弾ける）
+  // 起動→キャリブレ→再キャリブレボタン設置まで hand-touch の enterHandMode に任せる。
   createSwitchButton('✋ 手あそび', 20, () => {
-    showHandSetup(handTracker, () => {
-      tracker = handTracker;
-      updateDebug = createHandDebugPanel(handTracker);
-      console.log('[main] 手モードに切り替え');
+    enterHandMode(handTracker, {
+      onReady: () => {
+        tracker = handTracker;
+        if (!updateDebug) updateDebug = createHandDebugPanel(handTracker);
+        console.log('[main] 手モードに切り替え');
+      },
     });
   });
 
