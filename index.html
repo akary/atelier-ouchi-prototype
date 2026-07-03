@@ -3,15 +3,23 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Atelier Ouchi — Prototype</title>
+    <title>Atelier Ouchi — コンテンツ選択</title>
     <style>
       * { margin: 0; padding: 0; box-sizing: border-box; }
-      body { background: #0a1432; overflow: hidden; }
-      #canvas { display: block; width: 100vw; height: 100vh; }
+      html, body { min-height: 100%; }
+      body {
+        font-family: system-ui, sans-serif; color: #fff;
+        background: radial-gradient(circle at 30% 20%, #1a2a5e 0%, #0a1432 55%, #060c22 100%);
+        min-height: 100vh;
+      }
+      #app {
+        min-height: 100vh; display: flex; flex-direction: column;
+        align-items: center; justify-content: center; padding: 48px 24px;
+      }
     </style>
   </head>
   <body>
-    <canvas id="canvas"></canvas>
-    <script type="module" src="/src/main.ts"></script>
+    <main id="app"></main>
+    <script type="module" src="/src/pages/top.ts"></script>
   </body>
 </html>

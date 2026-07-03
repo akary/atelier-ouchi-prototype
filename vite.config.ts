@@ -9,4 +9,14 @@ export default defineConfig({
     host: true,   // LAN上の他デバイス（スマホ）からアクセス可能にする
     port: 5173,
   },
+  build: {
+    rollupOptions: {
+      // マルチページ：トップと各コンテンツの HTML をエントリに登録する。
+      // コンテンツを増やしたらここに1行足す（<content-id>/index.html）。
+      input: {
+        top: 'index.html',
+        'star-catch': 'star-catch/index.html',
+      },
+    },
+  },
 });

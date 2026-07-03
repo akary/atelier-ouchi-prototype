@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>よぞらの星あつめ — Atelier Ouchi</title>
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      body { background: #0a1432; overflow: hidden; }
+      #canvas { display: block; width: 100vw; height: 100vh; }
+      /* トップに戻るボタン（投影の邪魔にならないよう控えめに） */
+      #back-to-top {
+        position: fixed; top: 16px; left: 16px; z-index: 60;
+        padding: 8px 16px; font-size: 14px; border-radius: 24px;
+        color: #fff; text-decoration: none; font-family: sans-serif;
+        background: rgba(255,255,255,0.12); border: 1px solid rgba(255,255,255,0.3);
+        backdrop-filter: blur(4px);
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="canvas"></canvas>
+    <a id="back-to-top" href="/">← コンテンツ選択にもどる</a>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
